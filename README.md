@@ -1,3 +1,5 @@
+<img src="images/neteclogo (2).png" alt="logo" width="300"/>
+
 # Microservicios en Python
 
 Aprenderás a diseñar, implementar y operar microservicios con Python, Docker y Kubernetes, integrando seguridad, persistencia y monitorización para crear aplicaciones distribuidas escalables y mantenibles.
@@ -67,6 +69,17 @@ Aprenderás a diseñar, implementar y operar microservicios con Python, Docker y
 - [instrumentar servicio con Prometheus, Grafana y Jaeger](Capitulo10/README.md#instrumentar-servicio-con-prometheus-grafana-y-jaeger)
   - Descripción: Instrumentar un servicio con Prometheus, Grafana y Jaeger para aplicar métricas, monitoreo y tracing distribuido conforme al contenido del capítulo.
   - Duración estimada: 64 min
+
+  
+  ---
+
+## 📬 **Contacto y más información**
+
+Si tienes alguna pregunta o necesitas más detalles, no dudes en [contactarnos](mailto:soporte@netec.com). También puedes encontrar más recursos en nuestra [página](https://netec.com).
+
+---
+
+¡Gracias por visitar nuestra plataforma! No olvides revisar todos los laboratorios y comenzar tu viaje de aprendizaje hoy mismo.
 
 ## Flujo de colaboración
 
