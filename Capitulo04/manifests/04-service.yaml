@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: products-service
+  namespace: microservicios-curso
+spec:
+  selector:
+    app: products-service
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: 30080
+  type: NodePort

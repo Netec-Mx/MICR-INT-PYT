@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: products-service
+  namespace: microservicios-curso
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: products-service
+  template:
+    metadata:
+      labels:
+        app: products-service
+    spec:
+      securityContext:
+        fsGroup: 10001
+      containers:
+        - name: products-service
+          image: products-service:2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: DATA_DIR
+              value: /app/data
+          volumeMounts:
+            - name: products-data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /products
+              port: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: products-data
+          persistentVolumeClaim:
+            claimName: products-pvc
