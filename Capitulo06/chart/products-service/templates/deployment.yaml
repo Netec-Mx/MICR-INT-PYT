@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "products-service.fullname" . }}
+  labels:
+    {{- include "products-service.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "products-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "products-service.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: products-service
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "products-service.fullname" . }}
+          readinessProbe:
+            httpGet:
+              path: /products
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /products
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

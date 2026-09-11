@@ -1,846 +1,244 @@
-# Práctica 4 — Desplegar servicio Python en un clúster local (minikube/kind)
+# Desplegar un servicio Python en un clúster local
 
-## Metadatos
+## Información de la práctica
 
 | Campo | Valor |
-|-------|-------|
-| **Duración** | 64 minutos |
-| **Complejidad** | Alta |
-| **Nivel Bloom** | Aplicar |
+|---|---|
+| **Duración contractual** | **41 minutos** |
+| **Plataforma elegida** | minikube |
+| **Producto** | Deployment y Service funcionales |
+| **Objetos** | Namespace, ConfigMap, Secret, Deployment y Service |
 
-## Descripción General
+## Objetivo
 
-En esta práctica desplegarás el microservicio `products-service` (imagen Docker publicada en la práctica 03-00-01) dentro de un clúster Kubernetes local gestionado por minikube. Crearás manifiestos YAML para Namespace, ConfigMap, Secret, Deployment y Service, aplicarás el modelo declarativo de Kubernetes y verificarás que el servicio es accesible desde el host a través de un NodePort. Esta práctica consolida los conceptos de arquitectura vistos en la lección 4.1 (plano de control, nodos trabajadores, bucle de reconciliación) llevándolos a la ejecución real.
+Desplegar `products-service` en un clúster Kubernetes local, separar configuración y secretos del contenedor, comprobar el rollout, acceder al servicio y escalar sus réplicas.
 
-## Objetivos de Aprendizaje
+El temario permite minikube o kind. Esta ruta usa minikube porque los laboratorios posteriores ya dependen de él; no es necesario ejecutar ambas alternativas.
 
-- [ ] Configurar y arrancar un clúster Kubernetes local de un nodo usando minikube 1.33.1 con driver Docker
-- [ ] Crear y aplicar manifiestos YAML de Kubernetes (Namespace, Deployment, Service) para el products-service
-- [ ] Gestionar configuración de la aplicación mediante ConfigMaps y credenciales sensibles con Secrets
-- [ ] Verificar el despliegue, escalar el número de réplicas y probar el acceso al servicio desde el host
+## Mapa del laboratorio
+
+```mermaid
+flowchart LR
+    A[Imagen products-service:1.0.0] --> B[Adaptar manifiestos]
+    C[minikube Ready] --> D[kubectl apply]
+    B --> D
+    D --> E[Namespace + ConfigMap<br/>+ Secret]
+    D --> F[Deployment]
+    F --> G[ReplicaSet]
+    G --> H1[Pod 1]
+    G --> H2[Pod 2]
+    E -. configuración .-> H1
+    E -. configuración .-> H2
+    I[Cliente local] --> J[Service / NodePort]
+    J --> H1 & H2
+    H1 & H2 --> K{Rollout, acceso<br/>y reconciliación OK?}
+    K -- No --> L[describe + logs + events]
+    L --> B
+    K -- Sí --> M[[Servicio desplegado y escalable]]
+```
+
+Se espera pasar del estado declarado en YAML a un servicio accesible, observar cómo Kubernetes crea sus recursos y demostrar que mantiene el número de réplicas solicitado.
 
 ## Prerrequisitos
 
-### Conocimientos previos
+- Docker y minikube instalados; el clúster debe poder iniciarse antes de la práctica.
+- `kubectl` configurado para el contexto local.
+- Imagen publicada en el laboratorio 3 como `<usuario>/products-service:1.0.0`.
+- Al menos 4 GB de RAM disponibles para minikube.
 
-- Haber completado la práctica 03-00-01 (imagen Docker publicada en Docker Hub)
-- Comprensión de la arquitectura de Kubernetes: plano de control, nodos trabajadores, API Server (lección 4.1)
-- Familiaridad con YAML y comandos básicos de terminal
+> Descargar herramientas, crear cuentas o resolver problemas del hipervisor son actividades de preparación previa, no parte de los 41 minutos.
 
-### Acceso y software requerido
+## Presupuesto de tiempo
 
-| Herramienta | Versión | Verificación |
-|-------------|---------|--------------|
-| Docker Engine | 26.1.3+ | `docker --version` |
-| minikube | 1.33.1 | `minikube version` |
-| kubectl | 1.30.1 | `kubectl version --client` |
-| Git | 2.45.1+ | `git --version` |
+| Actividad | Minutos |
+|---|---:|
+| Verificar clúster e imagen | 5 |
+| Revisar y adaptar manifiestos | 10 |
+| Aplicar y observar rollout | 8 |
+| Acceder y diagnosticar el servicio | 8 |
+| Escalar y comprobar reconciliación | 6 |
+| Validación y cierre | 4 |
+| **TOTAL** | **41** |
 
-### Recursos de hardware
+## Arquitectura
 
-| Recurso | Mínimo requerido |
-|---------|-----------------|
-| RAM disponible | 4 GB (para el clúster minikube) |
-| CPU | 2 núcleos libres |
-| Disco | 10 GB libres |
-
-## Entorno del Laboratorio
-
-### Estructura de directorios objetivo
-
-```
-~/microservicios-curso/
-├── k8s/
-│   └── products-service/
-│       ├── namespace.yaml
-│       ├── configmap.yaml
-│       ├── secret.yaml        ← NO se commitea (está en .gitignore)
-│       ├── deployment.yaml
-│       └── service.yaml
-└── ...
+```text
+Host → minikube Service/NodePort → Deployment → Pods products-service
+                                      ├── ConfigMap: APP_ENV
+                                      └── Secret: API_KEY de demostración
 ```
 
-### Convenciones
+Los manifiestos completos están en `manifests/`. El trabajo consiste en revisarlos, reemplazar la imagen y demostrar cómo Kubernetes alcanza y conserva el estado declarado.
 
-| Elemento | Valor |
-|----------|-------|
-| Namespace Kubernetes | `microservicios-curso` |
-| Imagen Docker | `<tu-usuario-dockerhub>/products-service:1.0.0` |
-| Puerto interno del contenedor | 8000 |
-| NodePort expuesto | 30080 |
-| API_SECRET_KEY (base64) | `Y3Vyc28tbWljcm9zZXJ2aWNpb3Mtc2VjcmV0LTIwMjQ=` |
+## Paso 1 — Verificar el entorno
 
----
-
-## Paso a Paso
-
-### Paso 1 — Iniciar el clúster minikube
-
-**Objetivo:** Levantar un clúster Kubernetes local de un nodo con recursos controlados, utilizando Docker como driver.
-
-**Instrucciones:**
-
-1. Verifica que Docker esté en ejecución:
-
-```bash
-docker info | grep "Server Version"
-```
-
-2. Si existe un clúster minikube previo que desees reiniciar limpiamente (opcional):
-
-```bash
-minikube delete
-```
-
-3. Inicia el clúster con la configuración especificada:
-
-```bash
-minikube start \
-  --driver=docker \
-  --kubernetes-version=v1.30.1 \
-  --cpus=2 \
-  --memory=4096
-```
-
-4. Verifica que el clúster esté activo:
+**Tiempo sugerido: 5 minutos**
 
 ```bash
 minikube status
+minikube start --driver=docker
+kubectl config current-context
+kubectl get nodes
 ```
 
-**Salida esperada:**
-
-```
-minikube
-type: Control Plane
-host: Running
-kubelet: Running
-apiserver: Running
-kubeconfig: Configured
-```
-
-**Verificación:**
+El nodo debe aparecer `Ready` y el contexto debe corresponder a minikube. Sustituya el marcador de imagen antes de aplicar:
 
 ```bash
-kubectl get nodes -o wide
+grep -R "your-dockerhub-user" Capitulo04/manifests
 ```
 
-Debes ver un nodo con STATUS `Ready` y ROLES `control-plane`. Esto confirma que el plano de control (API Server, etcd, Scheduler, Controller Manager) y el kubelet están operativos en el mismo nodo — exactamente la arquitectura de un nodo estudiada en la lección 4.1.
+Edite `03-deployment.yaml` y cambie `your-dockerhub-user` por su usuario. No cambie `1.0.0` por `latest`.
+
+## Paso 2 — Revisar los manifiestos
+
+**Tiempo sugerido: 10 minutos**
+
+Relacione cada archivo con su responsabilidad:
+
+| Archivo | Responsabilidad | Comprobación importante |
+|---|---|---|
+| `00-namespace.yaml` | Aislar recursos del curso | `metadata.name` |
+| `01-config.yaml` | Configuración no sensible | `APP_ENV` |
+| `02-secret.yaml` | Valor sensible de demostración | `stringData`, no producción |
+| `03-deployment.yaml` | Pods, rollout y estado deseado | labels/selectors idénticos |
+| `04-service.yaml` | Acceso estable a los Pods | `targetPort: 8000` |
+
+Antes de enviar al clúster, valide sintaxis y estructura:
 
 ```bash
-# Verificar componentes del plano de control
-kubectl get pods -n kube-system
+kubectl apply --dry-run=client -f Capitulo04/manifests/
 ```
 
-Debes observar pods como `etcd-minikube`, `kube-apiserver-minikube`, `kube-scheduler-minikube` y `kube-controller-manager-minikube` en estado `Running`.
+Busque en el Deployment:
 
----
+- imagen versionada;
+- `containerPort: 8000`;
+- variables desde ConfigMap y Secret;
+- requests y limits;
+- probes HTTP;
+- selector que coincide con las labels del Pod.
 
-### Paso 2 — Crear la estructura de directorios para manifiestos
+## Paso 3 — Aplicar y observar el rollout
 
-**Objetivo:** Organizar los manifiestos Kubernetes en el directorio estándar del curso.
-
-**Instrucciones:**
-
-1. Crea el directorio para los manifiestos:
+**Tiempo sugerido: 8 minutos**
 
 ```bash
-mkdir -p ~/microservicios-curso/k8s/products-service
+kubectl apply -f Capitulo04/manifests/
+kubectl -n microservicios-curso rollout status deployment/products-service --timeout=120s
+kubectl -n microservicios-curso get deployment,pods,service
 ```
 
-2. Navega al directorio:
+No continúe si aparece `ImagePullBackOff`. Use:
 
 ```bash
-cd ~/microservicios-curso/k8s/products-service
+kubectl -n microservicios-curso describe pod -l app=products-service
+kubectl -n microservicios-curso get events --sort-by=.lastTimestamp
 ```
 
-3. Asegúrate de que `secret.yaml` esté en el `.gitignore` del repositorio:
+Distinga el estado deseado (`replicas` en Deployment) del estado observado (`READY` y `AVAILABLE`).
+
+## Paso 4 — Acceder y diagnosticar
+
+**Tiempo sugerido: 8 minutos**
+
+Obtenga la URL que minikube expone y guárdela en una variable:
 
 ```bash
-# Desde la raíz del repositorio
-cd ~/microservicios-curso
-echo "k8s/products-service/secret.yaml" >> .gitignore
-```
-
-**Verificación:**
-
-```bash
-ls ~/microservicios-curso/k8s/products-service/
-grep "secret.yaml" ~/microservicios-curso/.gitignore
-```
-
-El directorio debe existir y el `.gitignore` debe contener la línea correspondiente.
-
----
-
-### Paso 3 — Crear el manifiesto del Namespace
-
-**Objetivo:** Definir un namespace dedicado para aislar todos los recursos del curso, evitando el namespace `default`.
-
-**Instrucciones:**
-
-1. Crea el archivo `namespace.yaml`:
-
-```bash
-cat > ~/microservicios-curso/k8s/products-service/namespace.yaml << 'EOF'
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: microservicios-curso
-  labels:
-    project: microservicios-curso
-    environment: development
-EOF
-```
-
-2. Aplica el manifiesto:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/namespace.yaml
-```
-
-**Salida esperada:**
-
-```
-namespace/microservicios-curso created
-```
-
-**Verificación:**
-
-```bash
-kubectl get namespaces | grep microservicios-curso
-```
-
-Debe aparecer el namespace con STATUS `Active`. Este namespace será el ámbito de todos los recursos que crearemos a continuación.
-
----
-
-### Paso 4 — Crear el ConfigMap
-
-**Objetivo:** Externalizar la configuración no sensible de la aplicación en un objeto ConfigMap, separando configuración del código (principio de los 12 factores).
-
-**Instrucciones:**
-
-1. Crea el archivo `configmap.yaml`:
-
-```bash
-cat > ~/microservicios-curso/k8s/products-service/configmap.yaml << 'EOF'
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: products-service-config
-  namespace: microservicios-curso
-  labels:
-    app: products-service
-data:
-  APP_ENV: "production"
-  LOG_LEVEL: "info"
-  APP_PORT: "8000"
-EOF
-```
-
-2. Aplica el manifiesto:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/configmap.yaml
-```
-
-**Salida esperada:**
-
-```
-configmap/products-service-config created
-```
-
-**Verificación:**
-
-```bash
-kubectl get configmap products-service-config -n microservicios-curso -o yaml
-```
-
-Confirma que las tres variables (`APP_ENV`, `LOG_LEVEL`, `APP_PORT`) aparecen en la sección `data`.
-
----
-
-### Paso 5 — Crear el Secret
-
-**Objetivo:** Almacenar la credencial `API_SECRET_KEY` de forma segura usando un objeto Secret con datos codificados en base64.
-
-**Instrucciones:**
-
-1. Verifica la codificación base64 del secreto:
-
-```bash
-echo -n 'curso-microservicios-secret-2024' | base64
-```
-
-La salida debe ser: `Y3Vyc28tbWljcm9zZXJ2aWNpb3Mtc2VjcmV0LTIwMjQ=`
-
-2. Crea el archivo `secret.yaml`:
-
-```bash
-cat > ~/microservicios-curso/k8s/products-service/secret.yaml << 'EOF'
-apiVersion: v1
-kind: Secret
-metadata:
-  name: products-service-secret
-  namespace: microservicios-curso
-  labels:
-    app: products-service
-type: Opaque
-data:
-  API_SECRET_KEY: Y3Vyc28tbWljcm9zZXJ2aWNpb3Mtc2VjcmV0LTIwMjQ=
-EOF
-```
-
-3. Aplica el manifiesto:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/secret.yaml
-```
-
-**Salida esperada:**
-
-```
-secret/products-service-secret created
-```
-
-**Verificación:**
-
-```bash
-kubectl get secret products-service-secret -n microservicios-curso
-```
-
-El secret debe aparecer con TYPE `Opaque` y DATA `1`. Recuerda: este archivo **nunca** se commitea al repositorio Git.
-
----
-
-### Paso 6 — Crear el Deployment
-
-**Objetivo:** Definir el Deployment que gestionará las réplicas del pod `products-service`, inyectando variables de entorno desde ConfigMap y Secret, y configurando probes de salud y límites de recursos.
-
-**Instrucciones:**
-
-1. Crea el archivo `deployment.yaml`. **Reemplaza `<tu-usuario-dockerhub>`** con tu usuario real de Docker Hub:
-
-```bash
-cat > ~/microservicios-curso/k8s/products-service/deployment.yaml << 'EOF'
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: products-service
-  namespace: microservicios-curso
-  labels:
-    app: products-service
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: products-service
-  template:
-    metadata:
-      labels:
-        app: products-service
-    spec:
-      containers:
-        - name: products-service
-          image: <tu-usuario-dockerhub>/products-service:1.0.0
-          ports:
-            - containerPort: 8000
-              protocol: TCP
-          envFrom:
-            - configMapRef:
-                name: products-service-config
-          env:
-            - name: API_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: products-service-secret
-                  key: API_SECRET_KEY
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 3
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 10
-            periodSeconds: 15
-            timeoutSeconds: 3
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
-      restartPolicy: Always
-EOF
-```
-
-2. **Edita el archivo** para reemplazar `<tu-usuario-dockerhub>` con tu usuario real:
-
-```bash
-# Ejemplo: si tu usuario es "jperez"
-sed -i 's/<tu-usuario-dockerhub>/jperez/' ~/microservicios-curso/k8s/products-service/deployment.yaml
-```
-
-3. Aplica el manifiesto:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/deployment.yaml
-```
-
-**Salida esperada:**
-
-```
-deployment.apps/products-service created
-```
-
-**Verificación:**
-
-```bash
-kubectl get deployment products-service -n microservicios-curso
-```
-
-Espera a que READY muestre `2/2`. Esto indica que el Controller Manager del plano de control ha reconciliado el estado deseado (2 réplicas) con el estado actual, asignando pods a través del Scheduler y ejecutándolos vía el kubelet.
-
-```bash
-# Verificar que los pods estén Running
-kubectl get pods -n microservicios-curso -l app=products-service
-```
-
-**Salida esperada (ejemplo):**
-
-```
-NAME                                READY   STATUS    RESTARTS   AGE
-products-service-7d8f9b6c4a-abc12   1/1     Running   0          30s
-products-service-7d8f9b6c4a-def34   1/1     Running   0          30s
-```
-
-> **Nota:** Si los pods quedan en `ImagePullBackOff`, verifica que la imagen exista en Docker Hub y que el nombre sea correcto. Consulta la sección de Troubleshooting.
-
----
-
-### Paso 7 — Crear el Service (NodePort)
-
-**Objetivo:** Exponer el Deployment al exterior del clúster mediante un Service de tipo NodePort en el puerto 30080.
-
-**Instrucciones:**
-
-1. Crea el archivo `service.yaml`:
-
-```bash
-cat > ~/microservicios-curso/k8s/products-service/service.yaml << 'EOF'
-apiVersion: v1
-kind: Service
-metadata:
-  name: products-service
-  namespace: microservicios-curso
-  labels:
-    app: products-service
-spec:
-  type: NodePort
-  selector:
-    app: products-service
-  ports:
-    - protocol: TCP
-      port: 8000
-      targetPort: 8000
-      nodePort: 30080
-EOF
-```
-
-2. Aplica el manifiesto:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/service.yaml
-```
-
-**Salida esperada:**
-
-```
-service/products-service created
-```
-
-**Verificación:**
-
-```bash
-kubectl get service products-service -n microservicios-curso
-```
-
-**Salida esperada:**
-
-```
-NAME               TYPE       CLUSTER-IP      EXTERNAL-IP   PORT(S)          AGE
-products-service   NodePort   10.96.xxx.xxx   <none>        8000:30080/TCP   10s
-```
-
-El kube-proxy en el nodo trabajador configurará las reglas de red (iptables/IPVS) para enrutar el tráfico del puerto 30080 hacia los pods seleccionados.
-
----
-
-### Paso 8 — Verificar el despliegue completo
-
-**Objetivo:** Confirmar que todos los recursos están correctamente creados y que el servicio responde.
-
-**Instrucciones:**
-
-1. Lista todos los recursos del namespace:
-
-```bash
-kubectl get all -n microservicios-curso
-```
-
-2. Describe uno de los pods para verificar la inyección de variables:
-
-```bash
-# Obtén el nombre de un pod
-POD_NAME=$(kubectl get pods -n microservicios-curso -l app=products-service -o jsonpath='{.items[0].metadata.name}')
-
-# Describe el pod
-kubectl describe pod $POD_NAME -n microservicios-curso
-```
-
-Verifica en la sección `Environment` que aparezcan las variables `APP_ENV`, `LOG_LEVEL`, `APP_PORT` (del ConfigMap) y `API_SECRET_KEY` (del Secret).
-
-3. Revisa los logs del pod:
-
-```bash
-kubectl logs $POD_NAME -n microservicios-curso
-```
-
-Debes ver los logs de arranque de Uvicorn/FastAPI indicando que el servidor está escuchando en el puerto 8000.
-
-4. Accede al servicio desde el host:
-
-```bash
-minikube service products-service -n microservicios-curso --url
-```
-
-Este comando devuelve una URL (por ejemplo, `http://192.168.49.2:30080`). Usa esa URL para probar:
-
-```bash
-# Guarda la URL en una variable
 SERVICE_URL=$(minikube service products-service -n microservicios-curso --url)
-
-# Prueba el endpoint de salud
-curl -s ${SERVICE_URL}/health
+echo "$SERVICE_URL"
 ```
 
-**Salida esperada:**
-
-```json
-{"status":"healthy"}
-```
-
-5. Prueba el endpoint principal de productos:
+En otra terminal, pruebe la URL devuelta:
 
 ```bash
-curl -s ${SERVICE_URL}/products | python3 -m json.tool
+curl "$SERVICE_URL/products"
 ```
 
-Debes recibir una respuesta JSON válida (lista de productos o lista vacía según la implementación de la práctica 03-00-01).
+En PowerShell use:
 
----
+```powershell
+$serviceUrl = minikube service products-service -n microservicios-curso --url
+Invoke-RestMethod "$serviceUrl/products"
+```
 
-### Paso 9 — Escalar el Deployment a 3 réplicas
-
-**Objetivo:** Demostrar el escalado horizontal declarativo y verificar que el Controller Manager crea el pod adicional automáticamente.
-
-**Instrucciones:**
-
-1. Escala el deployment:
+Alternativa estable para cualquier plataforma:
 
 ```bash
-kubectl scale deployment products-service -n microservicios-curso --replicas=3
+kubectl -n microservicios-curso port-forward service/products-service 8000:80
+curl http://127.0.0.1:8000/products
 ```
 
-**Salida esperada:**
-
-```
-deployment.apps/products-service scaled
-```
-
-2. Verifica que la tercera réplica se crea:
+Compruebe la configuración dentro de un Pod:
 
 ```bash
-kubectl get pods -n microservicios-curso -l app=products-service -w
+POD=$(kubectl -n microservicios-curso get pod -l app=products-service -o jsonpath='{.items[0].metadata.name}')
+kubectl -n microservicios-curso exec "$POD" -- sh -c 'echo "$APP_ENV"; test -n "$API_KEY" && echo "API_KEY presente"'
 ```
 
-Presiona `Ctrl+C` cuando los 3 pods estén en estado `Running`.
+No imprima el valor del secreto.
 
-3. Confirma el estado del deployment:
+## Paso 5 — Escalar y comprobar reconciliación
+
+**Tiempo sugerido: 6 minutos**
 
 ```bash
-kubectl get deployment products-service -n microservicios-curso
+kubectl -n microservicios-curso scale deployment/products-service --replicas=3
+kubectl -n microservicios-curso rollout status deployment/products-service --timeout=120s
+kubectl -n microservicios-curso get pods -l app=products-service -o wide
 ```
 
-**Salida esperada:**
+El Service mantiene el mismo nombre y distribuye tráfico entre los Pods que cumplen su selector. El escalado manual demuestra reconciliación; el HPA se estudia en el capítulo 6.
 
-```
-NAME               READY   UP-TO-DATE   AVAILABLE   AGE
-products-service   3/3     3            3           5m
-```
-
-**Verificación conceptual:** El bucle de reconciliación del ReplicaSet Controller detectó que el estado deseado cambió de 2 a 3 réplicas. Como el estado actual tenía solo 2, el controlador instruyó al Scheduler para planificar un pod adicional, y el kubelet del nodo lo ejecutó.
-
----
-
-### Paso 10 — Commit de los manifiestos al repositorio
-
-**Objetivo:** Versionar los manifiestos creados en el repositorio Git del curso.
-
-**Instrucciones:**
-
-1. Navega a la raíz del repositorio:
+Elimine un Pod y observe que el Deployment lo repone:
 
 ```bash
-cd ~/microservicios-curso
+kubectl -n microservicios-curso delete pod "$POD"
+kubectl -n microservicios-curso get pods -w
 ```
 
-2. Añade los archivos (excepto `secret.yaml` que está en `.gitignore`):
+Detenga la observación con `Ctrl+C` cuando vuelva a haber tres Pods.
+
+## Validación final
+
+**Tiempo sugerido: 4 minutos**
+
+- [ ] El nodo local está `Ready`.
+- [ ] Los cinco manifiestos pasan `--dry-run=client`.
+- [ ] Deployment muestra tres réplicas disponibles.
+- [ ] Service selecciona los Pods correctos.
+- [ ] `/products` responde mediante Service o port-forward.
+- [ ] El Pod recibe ConfigMap y Secret sin exponer el secreto.
+- [ ] El Deployment repone un Pod eliminado.
 
 ```bash
-git add k8s/products-service/namespace.yaml
-git add k8s/products-service/configmap.yaml
-git add k8s/products-service/deployment.yaml
-git add k8s/products-service/service.yaml
-git add .gitignore
+kubectl -n microservicios-curso get deploy products-service \
+  -o jsonpath='{.status.availableReplicas}{" réplicas disponibles\n"}'
 ```
 
-3. Verifica que `secret.yaml` NO esté incluido:
+## Resultado esperado
 
-```bash
-git status
-```
+Un servicio FastAPI desplegado en minikube mediante objetos declarativos, accesible desde el host y con tres réplicas reconciliadas. Los manifiestos quedan disponibles para añadir almacenamiento en el laboratorio 5.
 
-4. Realiza el commit:
+## Preguntas de cierre
 
-```bash
-git commit -m "[lab04] Añadir manifiestos Kubernetes para products-service (Namespace, ConfigMap, Deployment, Service)"
-```
+1. ¿Por qué Service selecciona Pods mediante labels y no por nombre?
+2. ¿Qué diferencia existe entre ConfigMap y Secret?
+3. ¿Qué problema detecta readiness que liveness no debería resolver?
+4. ¿Qué componente repone el Pod eliminado?
 
-**Verificación:**
+## Solución rápida de problemas
 
-```bash
-git log --oneline -1
-```
+- `ImagePullBackOff`: verifique usuario, tag, visibilidad del repositorio y credenciales.
+- `READY 0/1`: consulte eventos y confirme que `/products` responde 200.
+- Service sin endpoints: compare `spec.selector` con las labels del Pod.
+- `minikube service` no abre la URL: use `port-forward`.
+- Recursos insuficientes: reduzca temporalmente a una réplica; no elimine requests/limits sin analizar la causa.
 
----
 
-## Validación y Pruebas
 
-Ejecuta la siguiente secuencia completa de validación para confirmar que el laboratorio se completó correctamente:
+## Fuentes
 
-```bash
-echo "=== Validación del Lab 04-00-01 ==="
-
-echo ""
-echo "1. Estado del clúster minikube:"
-minikube status
-
-echo ""
-echo "2. Namespace:"
-kubectl get namespace microservicios-curso -o jsonpath='{.status.phase}'
-echo ""
-
-echo ""
-echo "3. ConfigMap:"
-kubectl get configmap products-service-config -n microservicios-curso -o jsonpath='{.data}' | python3 -m json.tool
-
-echo ""
-echo "4. Secret (existe):"
-kubectl get secret products-service-secret -n microservicios-curso -o jsonpath='{.type}'
-echo ""
-
-echo ""
-echo "5. Deployment (3 réplicas disponibles):"
-kubectl get deployment products-service -n microservicios-curso -o jsonpath='Replicas deseadas: {.spec.replicas}, Disponibles: {.status.availableReplicas}'
-echo ""
-
-echo ""
-echo "6. Pods Running:"
-kubectl get pods -n microservicios-curso -l app=products-service --field-selector=status.phase=Running --no-headers | wc -l
-
-echo ""
-echo "7. Service NodePort:"
-kubectl get service products-service -n microservicios-curso -o jsonpath='Puerto: {.spec.ports[0].nodePort}'
-echo ""
-
-echo ""
-echo "8. Health check:"
-SERVICE_URL=$(minikube service products-service -n microservicios-curso --url 2>/dev/null)
-curl -s --max-time 5 ${SERVICE_URL}/health
-echo ""
-
-echo ""
-echo "=== Validación completada ==="
-```
-
-**Criterios de éxito:**
-
-| Verificación | Resultado esperado |
-|---|---|
-| Clúster minikube | host: Running, kubelet: Running, apiserver: Running |
-| Namespace | `Active` |
-| ConfigMap | Contiene APP_ENV, LOG_LEVEL, APP_PORT |
-| Secret | Tipo `Opaque` |
-| Deployment réplicas | Deseadas: 3, Disponibles: 3 |
-| Pods Running | 3 |
-| Service NodePort | 30080 |
-| Health check | `{"status":"healthy"}` |
-
----
-
-## Resolución de Problemas
-
-### Problema 1: Pods en estado `ImagePullBackOff` o `ErrImagePull`
-
-**Síntomas:**
-
-```
-NAME                                READY   STATUS             RESTARTS   AGE
-products-service-7d8f9b6c4a-abc12   0/1     ImagePullBackOff   0          60s
-```
-
-Al ejecutar `kubectl describe pod <nombre> -n microservicios-curso`, la sección Events muestra:
-
-```
-Failed to pull image "<usuario>/products-service:1.0.0": rpc error: code = NotFound
-```
-
-**Causa:** La imagen no existe en Docker Hub con el nombre/tag especificado. Puede deberse a un error tipográfico en el nombre de usuario, nombre de imagen o tag, o a que la imagen no fue publicada correctamente en la práctica 03-00-01.
-
-**Solución:**
-
-1. Verifica que la imagen existe en Docker Hub:
-
-```bash
-docker pull <tu-usuario-dockerhub>/products-service:1.0.0
-```
-
-2. Si no existe, vuelve a publicarla:
-
-```bash
-docker tag microservicios-curso/products-service:1.0.0 <tu-usuario-dockerhub>/products-service:1.0.0
-docker push <tu-usuario-dockerhub>/products-service:1.0.0
-```
-
-3. Corrige el nombre de imagen en `deployment.yaml` y vuelve a aplicar:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/deployment.yaml
-```
-
-4. Elimina los pods con error para forzar la recreación:
-
-```bash
-kubectl delete pods -n microservicios-curso -l app=products-service
-```
-
----
-
-### Problema 2: Pods en estado `Running` pero `READY 0/1` (readinessProbe falla)
-
-**Síntomas:**
-
-```
-NAME                                READY   STATUS    RESTARTS   AGE
-products-service-7d8f9b6c4a-abc12   0/1     Running   0          90s
-```
-
-Al describir el pod, los Events muestran:
-
-```
-Readiness probe failed: Get "http://10.244.0.5:8000/health": dial tcp 10.244.0.5:8000: connect: connection refused
-```
-
-**Causa:** La aplicación no está escuchando en el puerto 8000 dentro del contenedor, o el endpoint `/health` no existe. Esto puede ocurrir si la variable `APP_PORT` no está siendo utilizada por la aplicación, o si hay un error de arranque en FastAPI.
-
-**Solución:**
-
-1. Revisa los logs del contenedor para identificar errores de arranque:
-
-```bash
-POD_NAME=$(kubectl get pods -n microservicios-curso -l app=products-service -o jsonpath='{.items[0].metadata.name}')
-kubectl logs $POD_NAME -n microservicios-curso
-```
-
-2. Si la aplicación usa un puerto diferente, verifica la configuración del Dockerfile y ajusta `containerPort` y las probes en `deployment.yaml`.
-
-3. Si el endpoint `/health` no existe, verifica el código fuente de la práctica 03-00-01. Temporalmente puedes cambiar la probe a `/` o `/docs`:
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /docs
-    port: 8000
-```
-
-4. Aplica los cambios:
-
-```bash
-kubectl apply -f ~/microservicios-curso/k8s/products-service/deployment.yaml
-```
-
----
-
-## Limpieza
-
-Si necesitas liberar recursos al finalizar la sesión de trabajo (el clúster puede reiniciarse en futuras prácticas):
-
-```bash
-# Opción A: Pausar minikube (conserva el estado, libera RAM/CPU)
-minikube stop
-
-# Opción B: Eliminar completamente el clúster (deberás recrearlo en la práctica 05-00-01)
-# minikube delete
-```
-
-> **Recomendación:** Usa `minikube stop` para conservar el clúster y retomarlo en la siguiente práctica. Los manifiestos YAML del directorio `k8s/products-service/` serán extendidos en la práctica 05-00-01 para añadir almacenamiento persistente (PersistentVolume y PersistentVolumeClaim).
-
-Para eliminar solo los recursos del namespace sin destruir el clúster:
-
-```bash
-# NO ejecutar si planeas continuar con la práctica 05-00-01
-# kubectl delete namespace microservicios-curso
-```
-
----
-
-## Resumen
-
-En esta práctica has aplicado los conceptos de la arquitectura de Kubernetes estudiados en la lección 4.1:
-
-| Concepto teórico | Aplicación práctica |
-|---|---|
-| Plano de control (API Server, etcd, Scheduler, Controller Manager) | Observado con `kubectl get pods -n kube-system` al iniciar minikube |
-| Modelo declarativo | Definición del estado deseado en manifiestos YAML |
-| Bucle de reconciliación | Escalado de 2→3 réplicas: el Controller Manager detectó la diferencia y creó el pod faltante |
-| kubelet | Ejecutó los contenedores en el nodo |
-| kube-proxy | Configuró las reglas de red para el Service NodePort |
-
-**Artefactos generados:**
-
-- `~/microservicios-curso/k8s/products-service/namespace.yaml`
-- `~/microservicios-curso/k8s/products-service/configmap.yaml`
-- `~/microservicios-curso/k8s/products-service/secret.yaml` (no versionado)
-- `~/microservicios-curso/k8s/products-service/deployment.yaml`
-- `~/microservicios-curso/k8s/products-service/service.yaml`
-
-**Próximo paso:** En la práctica 05-00-01 extenderás estos manifiestos para añadir PersistentVolumes y PersistentVolumeClaims, garantizando que los datos del servicio persistan entre reinicios de pods.
-
-### Recursos adicionales
-
-- [Documentación oficial de minikube](https://minikube.sigs.k8s.io/docs/)
-- [Kubernetes: Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
-- [Kubernetes: Services — NodePort](https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport)
-- [Kubernetes: ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
-- [Kubernetes: Secrets](https://kubernetes.io/docs/concepts/configuration/secret/)
-- [Kubernetes: Configure Liveness, Readiness and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
+- https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+- https://kubernetes.io/docs/concepts/services-networking/service/
+- https://kubernetes.io/docs/concepts/configuration/configmap/
+- https://kubernetes.io/docs/concepts/configuration/secret/

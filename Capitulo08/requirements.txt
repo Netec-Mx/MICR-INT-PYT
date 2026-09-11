@@ -1,0 +1,5 @@
+SQLAlchemy==2.0.30
+asyncpg==0.29.0
+motor==3.4.0
+pytest==8.2.2
+pytest-asyncio==0.23.7

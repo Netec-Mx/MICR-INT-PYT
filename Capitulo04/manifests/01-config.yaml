@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: products-config
+  namespace: microservicios-curso
+data:
+  APP_ENV: lab
