@@ -1,3 +1,5 @@
+<img src="images/neteclogo (2).png" alt="logo" width="300"/>
+
 # Fundamentos de Microservicios
 
 Repositorio de laboratorios del curso **Fundamentos de Microservicios** (`MICR_INT_PYT`). Las prácticas recorren diseño, APIs, contenedores, Kubernetes, persistencia, seguridad, caché y observabilidad con Python.
@@ -93,3 +95,12 @@ revision_labs/
 ## Flujo de colaboración
 
 Trabaje en una rama propia, revise `git status` antes de modificar y abra un Pull Request hacia la rama indicada por los responsables del repositorio. No se fija aquí un nombre de rama permanente porque puede variar entre entregas.
+  - ---
+
+## 📬 **Contacto y más información**
+
+Si tienes alguna pregunta o necesitas más detalles, no dudes en [contactarnos](mailto:soporte@netec.com). También puedes encontrar más recursos en nuestra [página](https://netec.com).
+
+---
+
+¡Gracias por visitar nuestra plataforma! No olvides revisar todos los laboratorios y comenzar tu viaje de aprendizaje hoy mismo.
